@@ -33,18 +33,29 @@
   .interim { color:var(--mute); font-style:italic; padding-top:8px; }
   .empty { color:var(--mute); text-align:center; padding:28px 0; }
   .spacer { flex:1; }
-  input[type=text] { font:inherit; padding:9px 12px; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--ink); flex:1; min-width:200px; }
+  input[type=text], input[type=password] { font:inherit; padding:9px 12px; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--ink); flex:1; min-width:200px; }
   .meter { height:4px; background:var(--line); border-radius:2px; margin-top:12px; overflow:hidden; }
   #level { height:100%; width:0; background:var(--brand); transition:width .1s; }
   #saved { color:#1f9d55; font-size:13px; margin-top:6px; }
   #list { max-height:60vh; overflow-y:auto; }
   #pending { color:var(--brand); font-size:13px; }
+  .hint { color:var(--mute); font-size:13px; margin-top:8px; }
+  .hint a { color:var(--brand); }
+  [hidden] { display:none !important; }
 </style>
 </head>
 <body>
 <div class="wrap">
   <h1>凑凑听写</h1>
   <p class="sub">普通话语音转文字 · 课堂录音 · 自动保存到 Word</p>
+
+  <div class="card" id="groqBox" hidden>
+    <div class="row">
+      <input type="password" id="groqKey" placeholder="Groq 密钥 (gsk_...)" autocomplete="off">
+    </div>
+    <div class="hint">免费获取：<a href="https://console.groq.com/keys" target="_blank" rel="noopener">console.groq.com/keys</a> · 密钥只保存在本手机上。<br>
+    用 iPhone「语音备忘录」录课（可切换到其他应用）→ 下课后 ⋯ → 存储到“文件” → 点“上传录音”。</div>
+  </div>
 
   <div class="card">
     <div class="row" style="margin-bottom:12px">
@@ -60,7 +71,7 @@
       </select>
       <span class="spacer"></span>
       <button id="btnUpload">上传音频</button>
-      <input type="file" id="file" accept="audio/*,video/mp4" hidden>
+      <input type="file" id="file" accept="audio/*,.m4a,.mp3,.wav,video/mp4" hidden>
     </div>
     <div class="meter"><div id="level"></div></div>
     <div id="status" style="margin-top:10px"></div>

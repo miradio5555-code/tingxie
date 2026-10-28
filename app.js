@@ -242,12 +242,98 @@ function stop() {
 
 $('btnRec').onclick = () => (recording ? stop() : start());
 
+// ---------- phone: Voice Memos file -> Groq Whisper large-v3 (no server) ----------
+const GROQ_KEY = 'cc-groq-key';
+const GROQ_URL = 'https://api.groq.com/openai/v1/audio/transcriptions';
+const GROQ_MAX = 24 * 1024 * 1024; // Groq free tier accepts up to 25 MB per request
+const PART_SEC = 600;              // long recordings are split into ~10 min parts
+const ZH_PROMPT = '以下是普通话的课堂讲座，使用简体中文，带标点符号。';
+const FULLWIDTH = { ',': '，', '?': '？', '!': '！', ':': '：', ';': '；' };
+const groqKey = () => { try { return localStorage.getItem(GROQ_KEY) || ''; } catch { return ''; } };
+
+async function groqTranscribe(blob, name, context) {
+  const fd = new FormData();
+  fd.append('file', blob, name);
+  fd.append('model', 'whisper-large-v3');
+  fd.append('language', 'zh');
+  fd.append('response_format', 'verbose_json');
+  fd.append('temperature', '0');
+  fd.append('prompt', ZH_PROMPT + context.slice(-60));
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch(GROQ_URL, { method: 'POST', headers: { Authorization: 'Bearer ' + groqKey() }, body: fd });
+    if (res.status === 429 && attempt < 3) { // free-tier rate limit: wait and retry
+      const wait = Number(res.headers.get('retry-after')) || 20;
+      setStatus(`Groq 限速，${wait} 秒后重试…`);
+      await new Promise((r) => setTimeout(r, wait * 1000));
+      continue;
+    }
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 401) throw new Error('Groq 密钥无效，请检查');
+    if (!res.ok) throw new Error(data.error?.message || 'Groq ' + res.status);
+    return (data.segments || [])
+      .filter((x) => !(x.no_speech_prob > 0.6))
+      .map((x) => ({ start: x.start, text: x.text.trim().replace(/[,?!:;]/g, (c) => FULLWIDTH[c]) }))
+      .filter((x) => x.text);
+  }
+}
+
+// Decodes a long recording to 16 kHz mono and cuts it into parts at the quietest moment near each boundary.
+async function splitAudio(file) {
+  const bytes = await file.arrayBuffer();
+  let buf;
+  try { buf = await new OfflineAudioContext(1, 1, RATE).decodeAudioData(bytes); }
+  catch { buf = await new OfflineAudioContext(1, 1, 44100).decodeAudioData(bytes); }
+  const data = resample(buf.getChannelData(0), buf.sampleRate);
+  const parts = [], win = RATE / 10; // 100 ms windows
+  let pos = 0;
+  while (pos < data.length) {
+    let end = Math.min(data.length, pos + PART_SEC * RATE);
+    if (end < data.length) {
+      let best = end, bestE = Infinity;
+      for (let w = end - 15 * RATE; w < end; w += win) { // look for a pause in the last 15 s
+        let e = 0; for (let i = w; i < w + win; i++) e += data[i] * data[i];
+        if (e < bestE) { bestE = e; best = w + win / 2; }
+      }
+      end = Math.floor(best);
+    }
+    parts.push({ start: pos / RATE, blob: encodeWav(data.subarray(pos, end)) });
+    pos = end;
+  }
+  return parts;
+}
+
+async function transcribeFileGroq(f) {
+  if (!groqKey()) { setStatus('请先在上方填写 Groq 密钥'); $('groqKey').focus(); return; }
+  const base = segments.length ? segments[segments.length - 1].start + 1 : 0;
+  const t = Date.now();
+  let parts;
+  if (f.size <= GROQ_MAX) parts = [{ start: 0, blob: f, name: f.name }];
+  else {
+    setStatus('录音较长，正在切分…');
+    parts = await splitAudio(f);
+  }
+  for (let i = 0; i < parts.length; i++) {
+    setStatus(`识别中… ${i + 1} / ${parts.length}`);
+    const context = segments.map((s) => s.text).join('');
+    const segs = await groqTranscribe(parts[i].blob, parts[i].name || `part${i + 1}.wav`, context);
+    segs.forEach((s) => add(base + parts[i].start + s.start, s.text));
+  }
+  setStatus(`✓ 完成（${Math.round((Date.now() - t) / 1000)} 秒）· 点击“保存 Word”`);
+  $('btnOpen').scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
 $('btnUpload').onclick = () => $('file').click();
 $('file').onchange = async (e) => {
   const f = e.target.files[0];
   e.target.value = '';
   if (!f) return;
-  if (!$('name').value.trim()) $('name').value = f.name.replace(/\.[^.]+$/, '');
+  if (!$('name').value.trim() || /^讲座 \d{4}-/.test($('name').value)) $('name').value = f.name.replace(/\.[^.]+$/, '');
+  if (STATIC) {
+    $('btnUpload').disabled = true;
+    try { await transcribeFileGroq(f); } catch (err) { setStatus('错误：' + err.message); }
+    $('btnUpload').disabled = false;
+    return;
+  }
   setStatus('识别中：' + f.name + '（长录音需要几分钟）');
   try {
     const r = await sendAudio(f, f.name);
@@ -345,7 +431,10 @@ function enableStatic() {
   $('engine').querySelector('[value=whisper]').remove();
   $('engine').value = 'browser';
   $('btnFolder').hidden = true;
-  $('btnUpload').hidden = true;
+  $('btnUpload').textContent = '上传录音（语音备忘录）';
+  $('btnUpload').className = 'primary';
+  $('groqBox').hidden = false;
+  $('groqKey').value = groqKey();
   $('btnOpen').textContent = '保存 Word';
   if (!(window.SpeechRecognition || window.webkitSpeechRecognition)) setStatus('此浏览器不支持语音识别，请使用 Chrome（安卓）或 Safari');
 }
@@ -353,3 +442,8 @@ fetch('/api/config').then((r) => (r.ok ? r.json() : Promise.reject())).then((c) 
   if (!c.whisper) $('engine').querySelector('[value=whisper]').textContent += ' — 未安装';
   else $('engine').value = 'whisper';
 }).catch(enableStatic);
+
+$('groqKey').addEventListener('change', () => {
+  try { localStorage.setItem(GROQ_KEY, $('groqKey').value.trim()); } catch {}
+  setStatus($('groqKey').value.trim() ? '✓ 密钥已保存在本机' : '');
+});
