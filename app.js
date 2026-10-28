@@ -110,7 +110,9 @@ function resample(data, from) {
 }
 
 function startWhisper() {
-  const ctx = new AudioContext({ sampleRate: RATE });
+  let ctx;
+  try { ctx = new AudioContext({ sampleRate: RATE }); } catch { ctx = new AudioContext(); } // older iOS rejects a custom rate
+  ctx.resume?.(); // iOS starts contexts suspended
   const src = ctx.createMediaStreamSource(stream);
   const proc = ctx.createScriptProcessor(FRAME, 1, 1);
   const frameSec = FRAME / ctx.sampleRate;
@@ -151,8 +153,11 @@ function send(blob, start) {
   sendQueue = sendQueue.then(async () => {
     try {
       const context = segments.map((s) => s.text).join('').slice(-80);
-      const r = await sendAudio(blob, 'phrase.wav', context);
-      r.segments.forEach((s) => add(start + s.start, s.text));
+      const segs = STATIC
+        ? await groqTranscribe(blob, 'phrase.wav', context)
+        : (await sendAudio(blob, 'phrase.wav', context)).segments;
+      segs.forEach((s) => add(start + s.start, s.text));
+      if (STATIC && recording) setStatus('录音中… 识别正常');
       draftText = '';
       $('draft').textContent = '';
     } catch (err) { setStatus('识别错误：' + err.message); }
@@ -194,8 +199,19 @@ function startBrowser(final) {
     $('draft').textContent = (final ? '' : draftText) + interim;
   };
   // Chrome stops after silence; restart while still recording.
-  recognition.onend = () => { if (recording && recognition) try { recognition.start(); } catch {} };
-  recognition.onerror = (e) => { if (final && e.error !== 'no-speech') setStatus('识别错误：' + e.error); };
+  let fails = 0;
+  recognition.onend = () => {
+    if (!(recording && recognition)) return;
+    if (fails > 5) { setStatus('浏览器识别无法继续（' + (lastErr || '未知') + '）。请点“刷新”，或改用 Groq 实时'); return; }
+    setTimeout(() => { try { recognition?.start(); } catch {} }, fails ? 400 : 0);
+  };
+  let lastErr = '';
+  recognition.onresult = ((orig) => (e) => { fails = 0; orig(e); })(recognition.onresult);
+  recognition.onerror = (e) => {
+    if (e.error === 'no-speech' || e.error === 'aborted') return;
+    lastErr = e.error; fails++;
+    if (final) setStatus('识别错误：' + e.error + (e.error === 'not-allowed' ? '（请在 设置→Safari/Siri 中允许听写与麦克风）' : ''));
+  };
   recognition.start();
 }
 
@@ -206,13 +222,18 @@ async function start() {
       audio: { echoCancellation: false, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
     });
   } catch { return setStatus('无法访问麦克风，请允许权限'); }
+  if (STATIC && $('engine').value === 'groq' && !groqKey()) {
+    stream.getTracks().forEach((t) => t.stop());
+    $('groqKey').focus();
+    return setStatus('请先在上方填写 Groq 密钥');
+  }
   lectureName();
   recording = true;
   // Continue the timeline when resuming the same lecture.
   t0 = Date.now() - (segments.length ? (segments[segments.length - 1].start + 3) * 1000 : 0);
   try {
     if ($('engine').value === 'browser') startBrowser(true);
-    else { startWhisper(); try { startBrowser(false); } catch {} }
+    else { startWhisper(); if (!STATIC) try { startBrowser(false); } catch {} }
   } catch (e) { recording = false; stream.getTracks().forEach((t) => t.stop()); return setStatus(e.message); }
   $('ctl').classList.add('on');
   $('btnRec').textContent = '■ 停止';
@@ -478,8 +499,10 @@ if (segments.length) { render(); $('btnRec').textContent = '● 继续录音'; }
 
 function enableStatic() {
   STATIC = true;
-  $('engine').querySelector('[value=whisper]').remove();
-  $('engine').value = 'browser';
+  const opt = $('engine').querySelector('[value=whisper]');
+  opt.value = 'groq';
+  opt.textContent = 'Groq 实时（更准，需密钥）';
+  try { $('engine').value = localStorage.getItem(GROQ_KEY) ? 'groq' : 'browser'; } catch { $('engine').value = 'browser'; }
   $('btnFolder').hidden = true;
   $('btnUpload').textContent = '上传录音（语音备忘录）';
   $('btnUpload').className = 'primary';
@@ -503,5 +526,12 @@ function saveKey() {
     setStatus('⚠ 无法保存密钥（请关闭 Safari 无痕模式）。本次使用有效，下次需重新粘贴');
   }
 }
+$('btnRefresh').onclick = async () => {
+  if (recording && !confirm('正在录音，刷新会中断录音（已识别的文字会保留）。继续？')) return;
+  try { localStorage.setItem(STORE, JSON.stringify({ name: $('name').value, segments })); } catch {}
+  try { (await caches?.keys?.() || []).forEach((k) => caches.delete(k)); } catch {}
+  try { (await navigator.serviceWorker?.getRegistrations?.() || []).forEach((r) => r.unregister()); } catch {}
+  location.replace(location.pathname + '?r=' + Date.now());
+};
 $('groqKey').addEventListener('keydown', (e) => { if (e.key === 'Enter') e.target.blur(); });
 ['input', 'change', 'blur', 'paste'].forEach((ev) => $('groqKey').addEventListener(ev, () => setTimeout(saveKey, 0)));
