@@ -42,12 +42,14 @@
   .hint { color:var(--mute); font-size:13px; margin-top:8px; }
   .hint a { color:var(--brand); }
   [hidden] { display:none !important; }
+  #groqKey { -webkit-text-security: disc; }
+  #groqKey:focus { -webkit-text-security: none; }
 </style>
 </head>
 <body>
 <div class="wrap">
   <h1>凑凑听写</h1>
-  <p class="sub">普通话语音转文字 · 课堂录音 · 自动保存到 Word · v7</p>
+  <p class="sub">普通话语音转文字 · 课堂录音 · 自动保存到 Word · v8</p>
 
   <div class="card" id="groqBox" hidden>
     <div class="row">
@@ -95,6 +97,6 @@
 
 <script src="https://cdn.jsdelivr.net/npm/docx@8.5.0/build/index.umd.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="app.js?v=7"></script>
+<script src="app.js?v=8"></script>
 </body>
 </html>
