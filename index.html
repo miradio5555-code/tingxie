@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>凑凑听写</title>
+<style>
+  :root { --bg:#f6f7fb; --card:#fff; --ink:#1c2230; --mute:#6b7487; --line:#e4e7ef; --brand:#2f6bff; --rec:#e5484d; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#12151c; --card:#1b2029; --ink:#e8ebf3; --mute:#98a1b5; --line:#2a303d; --brand:#5b8cff; --rec:#ff6369; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif; }
+  .wrap { max-width:900px; margin:0 auto; padding:24px 16px 64px; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  .sub { color:var(--mute); margin:0 0 20px; font-size:14px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px; margin-bottom:16px; }
+  .row { display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+  button, select { font:inherit; padding:9px 16px; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--ink); cursor:pointer; }
+  button:hover { border-color:var(--brand); }
+  button.primary { background:var(--brand); border-color:var(--brand); color:#fff; }
+  button.rec { background:var(--rec); border-color:var(--rec); color:#fff; }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  .timer { font-variant-numeric:tabular-nums; font-size:20px; min-width:70px; }
+  .dot { width:10px; height:10px; border-radius:50%; background:var(--rec); display:none; animation:b 1s infinite; }
+  .on .dot { display:inline-block; }
+  @keyframes b { 50% { opacity:.2; } }
+  #status { color:var(--mute); font-size:14px; }
+  .seg { display:flex; gap:12px; padding:8px 0; border-bottom:1px solid var(--line); }
+  .seg:last-child { border:0; }
+  .seg .t { color:var(--brand); font-variant-numeric:tabular-nums; font-size:13px; padding-top:3px; min-width:52px; }
+  .seg .x { flex:1; outline:none; }
+  .interim { color:var(--mute); font-style:italic; padding-top:8px; }
+  .empty { color:var(--mute); text-align:center; padding:28px 0; }
+  .spacer { flex:1; }
+  input[type=text] { font:inherit; padding:9px 12px; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--ink); flex:1; min-width:200px; }
+  .meter { height:4px; background:var(--line); border-radius:2px; margin-top:12px; overflow:hidden; }
+  #level { height:100%; width:0; background:var(--brand); transition:width .1s; }
+  #saved { color:#1f9d55; font-size:13px; margin-top:6px; }
+  #list { max-height:60vh; overflow-y:auto; }
+  #pending { color:var(--brand); font-size:13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>凑凑听写</h1>
+  <p class="sub">普通话语音转文字 · 课堂录音 · 自动保存到 Word</p>
+
+  <div class="card">
+    <div class="row" style="margin-bottom:12px">
+      <input type="text" id="name" placeholder="讲座名称" title="Word 文件名">
+      <button id="btnNew">新讲座</button>
+    </div>
+    <div class="row" id="ctl">
+      <button id="btnRec" class="primary">● 开始录音</button>
+      <span class="dot"></span><span class="timer" id="timer">00:00</span>
+      <select id="engine" title="识别引擎">
+        <option value="browser">浏览器实时识别（免费）</option>
+        <option value="whisper">Whisper 本地（更准）</option>
+      </select>
+      <span class="spacer"></span>
+      <button id="btnUpload">上传音频</button>
+      <input type="file" id="file" accept="audio/*,video/mp4" hidden>
+    </div>
+    <div class="meter"><div id="level"></div></div>
+    <div id="status" style="margin-top:10px"></div>
+    <div id="saved"></div>
+  </div>
+
+  <div class="card">
+    <div class="row" style="margin-bottom:8px">
+      <strong>转写结果</strong><span class="spacer"></span>
+      <span id="pending"></span>
+      <button id="btnOpen" class="primary">打开 Word</button>
+      <button id="btnFolder">文件夹</button>
+      <button id="btnXlsx">导出 Excel</button>
+      <button id="btnTxt">TXT</button>
+    </div>
+    <div id="list"><div class="empty">点击“开始录音”或上传音频文件</div></div>
+    <div class="interim" id="draft"></div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/docx@8.5.0/build/index.umd.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
