@@ -454,4 +454,5 @@ function saveKey() {
     setStatus('⚠ 无法保存密钥（请关闭 Safari 无痕模式）。本次使用有效，下次需重新粘贴');
   }
 }
+$('groqKey').addEventListener('keydown', (e) => { if (e.key === 'Enter') e.target.blur(); });
 ['input', 'change', 'blur', 'paste'].forEach((ev) => $('groqKey').addEventListener(ev, () => setTimeout(saveKey, 0)));
