@@ -18,6 +18,7 @@ let sendQueue = Promise.resolve();
 let STATIC = false;         // no server (phone-only): Word is built in the browser
 const MOBILE = /Android|iPhone|iPad/i.test(navigator.userAgent);
 let wakeLock = null;
+let sent = 0, got = 0, frameCount = 0;
 let draftText = '';         // instant browser draft shown until Whisper returns
 
 const fmt = (s) => {
@@ -128,6 +129,7 @@ function startWhisper() {
   };
 
   proc.onaudioprocess = (e) => {
+    frameCount++;
     const d = new Float32Array(e.inputBuffer.getChannelData(0));
     let sum = 0; for (let i = 0; i < d.length; i++) sum += d[i] * d[i];
     const rms = Math.sqrt(sum / d.length);
@@ -145,10 +147,11 @@ function startWhisper() {
   src.connect(proc);
   proc.connect(ctx.destination);
   audio = { ctx, src, proc, flush };
+  ['touchstart', 'click'].forEach((ev) => document.addEventListener(ev, () => ctx.state === 'suspended' && ctx.resume(), { once: false }));
 }
 
 function send(blob, start) {
-  pending++;
+  pending++; sent++;
   updatePending();
   sendQueue = sendQueue.then(async () => {
     try {
@@ -157,6 +160,7 @@ function send(blob, start) {
         ? await groqTranscribe(blob, 'phrase.wav', context)
         : (await sendAudio(blob, 'phrase.wav', context)).segments;
       segs.forEach((s) => add(start + s.start, s.text));
+      got++;
       if (STATIC && recording) setStatus('录音中… 识别正常');
       draftText = '';
       $('draft').textContent = '';
@@ -232,7 +236,10 @@ async function start() {
   // Continue the timeline when resuming the same lecture.
   t0 = Date.now() - (segments.length ? (segments[segments.length - 1].start + 3) * 1000 : 0);
   try {
-    if ($('engine').value === 'browser') startBrowser(true);
+    if ($('engine').value === 'browser') {
+      startBrowser(true);
+      if (MOBILE) stream.getTracks().forEach((t) => t.stop()); // iOS speech recognition fails while another mic stream is open
+    }
     else { startWhisper(); if (!STATIC) try { startBrowser(false); } catch {} }
   } catch (e) { recording = false; stream.getTracks().forEach((t) => t.stop()); return setStatus(e.message); }
   $('ctl').classList.add('on');
@@ -241,7 +248,16 @@ async function start() {
   $('engine').disabled = true;
   try { wakeLock = await navigator.wakeLock?.request('screen'); } catch {}
   setStatus(STATIC ? '录音中… 请保持屏幕常亮，不要切换到其他应用' : '录音中… 文字会逐句出现，并自动保存到 Word');
-  timerId = setInterval(() => ($('timer').textContent = fmt(now())), 250);
+  sent = got = frameCount = 0;
+  timerId = setInterval(() => {
+    $('timer').textContent = fmt(now());
+    if (!audio || !STATIC) return;
+    const sec = Math.floor(now());
+    if (audio.ctx.state !== 'running') setStatus('⚠ 音频未启动，请点一下屏幕');
+    else if (sec > 3 && !frameCount) setStatus('⚠ 没有收到声音，请检查麦克风权限，再点“刷新”');
+    else if (!sent && sec > 8) setStatus('已收到声音，但没检测到说话——请靠近麦克风大声说话（上方蓝条应跳动）');
+    else if (sent > got + 3 && !got) setStatus('已发送 ' + sent + ' 句，等待 Groq 返回…');
+  }, 250);
 }
 
 function stop() {
