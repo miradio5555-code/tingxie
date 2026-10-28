@@ -47,7 +47,7 @@
 <body>
 <div class="wrap">
   <h1>凑凑听写</h1>
-  <p class="sub">普通话语音转文字 · 课堂录音 · 自动保存到 Word · v6</p>
+  <p class="sub">普通话语音转文字 · 课堂录音 · 自动保存到 Word · v7</p>
 
   <div class="card" id="groqBox" hidden>
     <div class="row">
@@ -71,6 +71,7 @@
       </select>
       <span class="spacer"></span>
       <button id="btnUpload">上传音频</button>
+      <button id="btnResume" class="primary" hidden>继续识别</button>
       <input type="file" id="file" accept="audio/*,.m4a,.mp3,.wav,video/mp4" hidden>
     </div>
     <div class="meter"><div id="level"></div></div>
@@ -94,6 +95,6 @@
 
 <script src="https://cdn.jsdelivr.net/npm/docx@8.5.0/build/index.umd.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="app.js?v=6"></script>
+<script src="app.js?v=7"></script>
 </body>
 </html>

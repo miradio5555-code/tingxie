@@ -249,6 +249,8 @@ const GROQ_MAX = 8 * 1024 * 1024;  // bigger files are cut up: small requests su
 const PART_SEC = 300;              // parts of ~5 min (~10 MB as 16 kHz WAV)
 const ZH_PROMPT = '以下是普通话的课堂讲座，使用简体中文，带标点符号。';
 const FULLWIDTH = { ',': '，', '?': '？', '!': '！', ':': '：', ';': '；' };
+// Phrases Whisper invents on silence in Chinese audio (learned from video subtitles).
+const HALLUCINATION = /字幕|订阅|點贊|点赞|打赏|明镜|Amara|感谢观看|謝謝觀看|请不吝|下次再见|ZhaoYun|中文字幕/i;
 // The field is the source of truth; localStorage only restores it between visits.
 const groqKey = () => $('groqKey').value.trim() || (() => { try { return localStorage.getItem(GROQ_KEY) || ''; } catch { return ''; } })();
 
@@ -279,7 +281,7 @@ async function groqTranscribe(blob, name, context) {
     if (res.status === 401) throw new Error('Groq 密钥无效，请检查');
     if (!res.ok) throw new Error(data.error?.message || 'Groq ' + res.status);
     return (data.segments || [])
-      .filter((x) => !(x.no_speech_prob > 0.6))
+      .filter((x) => !(x.no_speech_prob > 0.6) && !(HALLUCINATION.test(x.text) && x.text.length < 40))
       .map((x) => ({ start: x.start, text: x.text.trim().replace(/[,?!:;]/g, (c) => FULLWIDTH[c]) }))
       .filter((x) => x.text);
   }
@@ -289,7 +291,7 @@ async function groqTranscribe(blob, name, context) {
 async function splitAudio(file) {
   const bytes = await file.arrayBuffer();
   let buf;
-  try { buf = await new OfflineAudioContext(1, 1, RATE).decodeAudioData(bytes); }
+  try { buf = await new OfflineAudioContext(1, 1, RATE).decodeAudioData(bytes.slice(0)); }
   catch { buf = await new OfflineAudioContext(1, 1, 44100).decodeAudioData(bytes); }
   const data = resample(buf.getChannelData(0), buf.sampleRate);
   const parts = [], win = RATE / 10; // 100 ms windows
@@ -310,6 +312,8 @@ async function splitAudio(file) {
   return parts;
 }
 
+let resumeJob = null; // {parts, next, base, t}: lets a failed upload continue from the failed part
+
 async function transcribeFileGroq(f) {
   if (!groqKey()) { setStatus('请先在上方填写 Groq 密钥'); $('groqKey').focus(); return; }
   const base = segments.length ? segments[segments.length - 1].start + 1 : 0;
@@ -327,21 +331,51 @@ async function transcribeFileGroq(f) {
     try { parts = await splitAudio(local); }
     catch (e) { throw new Error(`无法解码录音（${e.message}）。请改用 .m4a 或 .wav 格式`); }
   }
-  for (let i = 0; i < parts.length; i++) {
-    setStatus(`识别中… ${i + 1} / ${parts.length}（${(parts[i].blob.size / 1048576).toFixed(1)} MB）`);
-    const context = segments.map((s) => s.text).join('');
-    const segs = await groqTranscribe(parts[i].blob, parts[i].name || `part${i + 1}.wav`, context);
-    segs.forEach((s) => add(base + parts[i].start + s.start, s.text));
+  await runParts({ parts, next: 0, base, t });
+}
+
+async function runParts(job) {
+  resumeJob = null;
+  $('btnResume').hidden = true;
+  let lock = null;
+  try { lock = await navigator.wakeLock?.request('screen'); } catch {}
+  try {
+    for (let i = job.next; i < job.parts.length; i++) {
+      job.next = i;
+      setStatus(`识别中… ${i + 1} / ${job.parts.length}（${(job.parts[i].blob.size / 1048576).toFixed(1)} MB）· 请保持此页面打开`);
+      const context = segments.map((s) => s.text).join('');
+      const segs = await groqTranscribe(job.parts[i].blob, job.parts[i].name || `part${i + 1}.wav`, context);
+      segs.forEach((s) => add(job.base + job.parts[i].start + s.start, s.text));
+    }
+  } catch (e) {
+    resumeJob = job;
+    $('btnResume').textContent = `继续识别（从第 ${job.next + 1} / ${job.parts.length} 段）`;
+    $('btnResume').hidden = false;
+    throw e;
+  } finally {
+    try { lock?.release(); } catch {}
   }
-  setStatus(`✓ 完成（${Math.round((Date.now() - t) / 1000)} 秒）· 点击“保存 Word”`);
+  setStatus(`✓ 完成（${Math.round((Date.now() - job.t) / 1000)} 秒）· 点击“保存 Word”`);
   $('btnOpen').scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
+$('btnResume').onclick = async () => {
+  if (!resumeJob) return;
+  $('btnResume').disabled = true;
+  try { await runParts(resumeJob); } catch (err) { setStatus('错误：' + err.message); }
+  $('btnResume').disabled = false;
+};
 
 $('btnUpload').onclick = () => $('file').click();
 $('file').onchange = async (e) => {
   const f = e.target.files[0];
   e.target.value = '';
   if (!f) return;
+  if (STATIC && segments.length) {
+    if (confirm('识别新录音前清空当前内容？\n（未保存的请先点“取消”，再点“保存 Word”）\n\n确定 = 新讲座　取消 = 不识别')) {
+      segments = []; render(); resumeJob = null; $('btnResume').hidden = true;
+      $('name').value = '';
+    } else return;
+  }
   if (!$('name').value.trim() || /^讲座 \d{4}-/.test($('name').value)) $('name').value = f.name.replace(/\.[^.]+$/, '');
   if (STATIC) {
     $('btnUpload').disabled = true;
@@ -422,7 +456,8 @@ $('btnTxt').onclick = () => {
 
 $('btnNew').onclick = () => {
   if (recording) return;
-  if (segments.length && !confirm('开始新讲座？当前讲座已保存在 Word 中。')) return;
+  if (segments.length && !confirm(STATIC ? '开始新讲座？当前内容将被清空——如需保留，请先点“保存 Word”。' : '开始新讲座？当前讲座已保存在 Word 中。')) return;
+  resumeJob = null; $('btnResume').hidden = true;
   segments = [];
   $('name').value = defaultName();
   $('timer').textContent = '00:00';
