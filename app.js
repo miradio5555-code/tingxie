@@ -249,7 +249,8 @@ const GROQ_MAX = 24 * 1024 * 1024; // Groq free tier accepts up to 25 MB per req
 const PART_SEC = 600;              // long recordings are split into ~10 min parts
 const ZH_PROMPT = '以下是普通话的课堂讲座，使用简体中文，带标点符号。';
 const FULLWIDTH = { ',': '，', '?': '？', '!': '！', ':': '：', ';': '；' };
-const groqKey = () => { try { return localStorage.getItem(GROQ_KEY) || ''; } catch { return ''; } };
+// The field is the source of truth; localStorage only restores it between visits.
+const groqKey = () => $('groqKey').value.trim() || (() => { try { return localStorage.getItem(GROQ_KEY) || ''; } catch { return ''; } })();
 
 async function groqTranscribe(blob, name, context) {
   const fd = new FormData();
@@ -434,7 +435,7 @@ function enableStatic() {
   $('btnUpload').textContent = '上传录音（语音备忘录）';
   $('btnUpload').className = 'primary';
   $('groqBox').hidden = false;
-  $('groqKey').value = groqKey();
+  try { $('groqKey').value = localStorage.getItem(GROQ_KEY) || ''; } catch {}
   $('btnOpen').textContent = '保存 Word';
   if (!(window.SpeechRecognition || window.webkitSpeechRecognition)) setStatus('此浏览器不支持语音识别，请使用 Chrome（安卓）或 Safari');
 }
@@ -443,7 +444,14 @@ fetch('/api/config').then((r) => (r.ok ? r.json() : Promise.reject())).then((c) 
   else $('engine').value = 'whisper';
 }).catch(enableStatic);
 
-$('groqKey').addEventListener('change', () => {
-  try { localStorage.setItem(GROQ_KEY, $('groqKey').value.trim()); } catch {}
-  setStatus($('groqKey').value.trim() ? '✓ 密钥已保存在本机' : '');
-});
+function saveKey() {
+  const k = $('groqKey').value.trim();
+  try {
+    localStorage.setItem(GROQ_KEY, k);
+    if (localStorage.getItem(GROQ_KEY) !== k) throw new Error('readback');
+    setStatus(k ? '✓ 密钥已保存在本机' : '');
+  } catch {
+    setStatus('⚠ 无法保存密钥（请关闭 Safari 无痕模式）。本次使用有效，下次需重新粘贴');
+  }
+}
+['input', 'change', 'blur', 'paste'].forEach((ev) => $('groqKey').addEventListener(ev, () => setTimeout(saveKey, 0)));
