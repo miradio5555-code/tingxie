@@ -245,8 +245,8 @@ $('btnRec').onclick = () => (recording ? stop() : start());
 // ---------- phone: Voice Memos file -> Groq Whisper large-v3 (no server) ----------
 const GROQ_KEY = 'cc-groq-key';
 const GROQ_URL = 'https://api.groq.com/openai/v1/audio/transcriptions';
-const GROQ_MAX = 24 * 1024 * 1024; // Groq free tier accepts up to 25 MB per request
-const PART_SEC = 600;              // long recordings are split into ~10 min parts
+const GROQ_MAX = 8 * 1024 * 1024;  // bigger files are cut up: small requests survive flaky phone networks (Groq limit is 25 MB)
+const PART_SEC = 300;              // parts of ~5 min (~10 MB as 16 kHz WAV)
 const ZH_PROMPT = '以下是普通话的课堂讲座，使用简体中文，带标点符号。';
 const FULLWIDTH = { ',': '，', '?': '？', '!': '！', ':': '：', ';': '；' };
 // The field is the source of truth; localStorage only restores it between visits.
@@ -260,8 +260,15 @@ async function groqTranscribe(blob, name, context) {
   fd.append('response_format', 'verbose_json');
   fd.append('temperature', '0');
   fd.append('prompt', ZH_PROMPT + context.slice(-60));
+  const mb = (blob.size / 1048576).toFixed(1);
   for (let attempt = 0; ; attempt++) {
-    const res = await fetch(GROQ_URL, { method: 'POST', headers: { Authorization: 'Bearer ' + groqKey() }, body: fd });
+    let res;
+    try {
+      res = await fetch(GROQ_URL, { method: 'POST', headers: { Authorization: 'Bearer ' + groqKey().replace(/[^\x21-\x7e]/g, '') }, body: fd });
+    } catch (e) { // Safari reports every network failure as "Load failed"
+      if (attempt < 2) { setStatus(`网络不稳定，重试 ${attempt + 1}/2…`); await new Promise((r) => setTimeout(r, 2000)); continue; }
+      throw new Error(`无法连接 Groq（${mb} MB，${e.message}）。请检查网络/VPN/内容拦截器，并换 Wi‑Fi 重试`);
+    }
     if (res.status === 429 && attempt < 3) { // free-tier rate limit: wait and retry
       const wait = Number(res.headers.get('retry-after')) || 20;
       setStatus(`Groq 限速，${wait} 秒后重试…`);
@@ -307,14 +314,21 @@ async function transcribeFileGroq(f) {
   if (!groqKey()) { setStatus('请先在上方填写 Groq 密钥'); $('groqKey').focus(); return; }
   const base = segments.length ? segments[segments.length - 1].start + 1 : 0;
   const t = Date.now();
+  const mb = (f.size / 1048576).toFixed(1);
+  setStatus(`读取文件 ${mb} MB…`);
+  let buf;
+  try { buf = await f.arrayBuffer(); } // forces iOS to materialise the file (iCloud / lazy Files reference)
+  catch (e) { throw new Error(`无法读取文件（${e.message}）。请在“文件”App 中先点开下载该录音，再重试`); }
+  const local = new File([buf], f.name || 'rec.m4a', { type: f.type || 'audio/mp4' });
   let parts;
-  if (f.size <= GROQ_MAX) parts = [{ start: 0, blob: f, name: f.name }];
+  if (local.size <= GROQ_MAX) parts = [{ start: 0, blob: local, name: local.name }];
   else {
-    setStatus('录音较长，正在切分…');
-    parts = await splitAudio(f);
+    setStatus(`录音较长（${mb} MB），正在切分…`);
+    try { parts = await splitAudio(local); }
+    catch (e) { throw new Error(`无法解码录音（${e.message}）。请改用 .m4a 或 .wav 格式`); }
   }
   for (let i = 0; i < parts.length; i++) {
-    setStatus(`识别中… ${i + 1} / ${parts.length}`);
+    setStatus(`识别中… ${i + 1} / ${parts.length}（${(parts[i].blob.size / 1048576).toFixed(1)} MB）`);
     const context = segments.map((s) => s.text).join('');
     const segs = await groqTranscribe(parts[i].blob, parts[i].name || `part${i + 1}.wav`, context);
     segs.forEach((s) => add(base + parts[i].start + s.start, s.text));
